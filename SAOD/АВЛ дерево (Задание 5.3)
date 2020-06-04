@@ -1,0 +1,379 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
+using System.Diagnostics;
+using System.Diagnostics.Contracts;
+using System.Runtime.Serialization;
+using System.Security.Permissions;
+
+namespace rvl
+{
+    class Program
+    {
+        public class Avl<TKey, TValue> : IDictionary<TKey, TValue>
+        {
+            private struct Entry
+            {
+                public int hashCode;   
+                public int next;       
+                public TKey key;          
+                public TValue value;         
+            }
+
+            private int[] buckets;
+            private Entry[] entries;
+            private int count;
+            private int version;
+            private int freeList;
+            private int freeCount;
+            private IEqualityComparer<TKey> comparer;
+
+            public ICollection<TKey> Keys => keys();
+
+            public ICollection<TValue> Values => values();
+
+            private ICollection<TKey> keys()
+            {
+                var result = new List<TKey>();
+                foreach (var iter in this)
+                {
+                    result.Add(iter.Key);
+                }
+                return result;
+            }
+
+            private ICollection<TValue> values()
+            {
+                var result = new List<TValue>();
+                foreach (var iter in this)
+                {
+                    result.Add(iter.Value);
+                }
+                return result;
+            }
+
+            public int Count
+            {
+                get 
+                {
+                    return Count;
+                }
+            }
+
+            public bool IsReadOnly
+            {
+                get 
+                { 
+                    return false; 
+                }
+            }
+
+            public Avl(int size)
+            {
+                comparer = EqualityComparer<TKey>.Default;
+
+                buckets = new int[size];
+                for (int i = 0; i < buckets.Length; i++)
+                    buckets[i] = -1;
+                entries = new Entry[size];
+                freeList = -1;
+            }
+            public Avl(int size, IEqualityComparer<TKey> cr)
+            {
+                comparer = cr;
+                buckets = new int[size];
+                for (int i = 0; i < buckets.Length; i++)
+                    buckets[i] = -1;
+                entries = new Entry[size];
+                freeList = -1;
+            }
+
+            private void Resize()
+            {
+                Resize(count * 2);
+            }
+            private void Resize(int newSize)
+            {
+                int[] newBuckets = new int[newSize];
+                for (int i = 0; i < newBuckets.Length; i++)
+                    newBuckets[i] = -1;
+                Entry[] newEntries = new Entry[newSize];
+                Array.Copy(entries, 0, newEntries, 0, count);
+
+                for (int i = 0; i < count; i++)
+                {
+                    if (newEntries[i].hashCode >= 0)
+                    {
+                        int bucket = newEntries[i].hashCode % newSize;
+                        newEntries[i].next = newBuckets[bucket];
+                        newBuckets[bucket] = i;
+                    }
+                }
+                buckets = newBuckets;
+                entries = newEntries;
+            }
+
+
+            public void Add(TKey key, TValue value)
+            {
+                int hashCode = comparer.GetHashCode(key) & 0x7FFFFFFF;
+                int targetBucket = hashCode % buckets.Length;
+
+
+                for (int i = buckets[targetBucket]; i >= 0; i = entries[i].next)
+                {
+                    if (entries[i].hashCode == hashCode && comparer.Equals(entries[i].key, key))
+                    {
+
+                        entries[i].value = value;
+                        return;
+                    }
+
+                }
+                int index;
+                if (freeCount > 0)
+                {
+                    index = freeList;
+                    freeList = entries[index].next;
+                    freeCount--;
+                }
+                else
+                {
+                    if (count == entries.Length)
+                    {
+                        Resize();
+                        targetBucket = hashCode % buckets.Length;
+                    }
+                    index = count;
+                    count++;
+                }
+
+                entries[index].hashCode = hashCode;
+                entries[index].next = buckets[targetBucket];
+                entries[index].key = key;
+                entries[index].value = value;
+                buckets[targetBucket] = index;
+            }
+
+            public void Print()
+            {
+                Console.WriteLine("Index\tBuckets\t\tEntries\n");
+                for (int i = 0; i != buckets.Length; i++)
+                {
+                    Console.Write(i + "\t" + buckets[i] + "\t\tKey: ");
+                    Console.Write(entries[i].key + ", Hash: ");
+                    Console.Write(entries[i].hashCode + " ");
+                    Console.WriteLine(entries[i].next < 0 ? "" : (" -> " + entries[i].next));
+                }
+            }
+
+            private int FindEntry(TKey key)
+            {
+                int hashCode = comparer.GetHashCode(key) & 0x7FFFFFFF;
+                for (int i = buckets[hashCode % buckets.Length]; i >= 0; i = entries[i].next)
+
+                {
+                    if (entries[i].hashCode == hashCode && comparer.Equals(entries[i].key, key))
+                        return i;
+                }
+
+                return -1;
+            }
+            public TValue this[TKey key]
+            {
+                get
+                {
+                    int i = FindEntry(key);
+                    if (i >= 0) return entries[i].value;
+                    return default(TValue);
+                }
+                set
+                {
+                    Add(key, value);
+                }
+            }
+
+            public bool TryGetValue(TKey key, out TValue value)
+            {
+                int i = FindEntry(key);
+                if (i >= 0)
+                {
+                    value = entries[i].value;
+                    return true;
+                }
+                value = default(TValue);
+                return false;
+            }
+            public bool ContainsKey(TKey key)
+            {
+                return FindEntry(key) >= 0;
+            }
+
+            public bool Remove(TKey key)
+            { 
+                if (buckets != null)
+                {
+                    int hashCode = comparer.GetHashCode(key) & 0x7FFFFFFF;
+                    int bucket = hashCode % buckets.Length;
+                    int last = -1;
+                    for (int i = buckets[bucket]; i >= 0; last = i, i = entries[i].next)
+                    {
+                        if (entries[i].hashCode == hashCode && comparer.Equals(entries[i].key, key))
+                        {
+                            if (last < 0)
+                            {
+                                buckets[bucket] = entries[i].next;
+                            }
+                            else
+                            {
+                                entries[last].next = entries[i].next;
+                            }
+                            entries[i].hashCode = -1;
+                            entries[i].next = freeList;
+                            entries[i].key = default(TKey);
+                            entries[i].value = default(TValue);
+                            freeList = i;
+                            freeCount++;
+                            version++;
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            }
+
+            void ICollection<KeyValuePair<TKey, TValue>>.Add(KeyValuePair<TKey, TValue> keyValuePair)
+            {
+                Add(keyValuePair.Key, keyValuePair.Value);
+            }
+
+            public void Clear()
+            {
+                if (count > 0)
+                {
+                    for (int i = 0; i < buckets.Length; i++) buckets[i] = -1;
+                    Array.Clear(entries, 0, count);
+                    freeList = -1;
+                    count = 0;
+                    freeCount = 0;
+                    version++;
+                }
+            }
+
+            bool ICollection<KeyValuePair<TKey, TValue>>.Contains(KeyValuePair<TKey, TValue> keyValuePair)
+            {
+                int i = FindEntry(keyValuePair.Key);
+                if (i >= 0 && EqualityComparer<TValue>.Default.Equals(entries[i].value, keyValuePair.Value))
+                {
+                    return true;
+                }
+                return false;
+            }
+
+            private void CopyTo(KeyValuePair<TKey, TValue>[] array, int index)
+            {
+
+                int count = this.count;
+                Entry[] entries = this.entries;
+                for (int i = 0; i < count; i++)
+                {
+                    if (entries[i].hashCode >= 0)
+                    {
+                        array[index++] = new KeyValuePair<TKey, TValue>(entries[i].key, entries[i].value);
+                    }
+                }
+            }
+
+            bool ICollection<KeyValuePair<TKey, TValue>>.Remove(KeyValuePair<TKey, TValue> keyValuePair)
+            {
+                int i = FindEntry(keyValuePair.Key);
+                if (i >= 0 && EqualityComparer<TValue>.Default.Equals(entries[i].value, keyValuePair.Value))
+                {
+                    Remove(keyValuePair.Key);
+                    return true;
+                }
+                return false;
+            }
+
+ 
+
+            void ICollection<KeyValuePair<TKey, TValue>>.CopyTo(KeyValuePair<TKey, TValue>[] array, int arrayIndex)
+            {
+
+                int count = this.count;
+                Entry[] entries = this.entries;
+                for (int i = 0; i < count; i++)
+                {
+                    if (entries[i].hashCode >= 0)
+                    {
+                        array[arrayIndex++] = new KeyValuePair<TKey, TValue>(entries[i].key, entries[i].value);
+                    }
+                }
+            }
+
+            public IEnumerator<KeyValuePair<TKey, TValue>> GetEnumerator()
+            {
+                throw new NotImplementedException();
+            }
+
+            IEnumerator IEnumerable.GetEnumerator()
+            {
+                throw new NotImplementedException();
+            }
+        }
+
+
+        class MyComp : IEqualityComparer<string>
+        {
+            public bool Equals(string b1, string b2)
+            {
+                return b1 == b2;
+            }
+            public int GetHashCode(string x)
+            {
+                int hCode = 0;
+                foreach (var i in x)
+                    hCode = i + hCode;
+                return hCode;
+            }
+        }
+        static void Main(string[] args)
+        {
+
+            string input_text = System.IO.File.ReadAllText(@"big.txt");
+
+
+            System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
+            long elapsedMs;
+ 
+            var obj = new Avl<string, int>(5);
+ 
+            string str = "";
+            foreach (var i in input_text)
+            {
+                if (i >= 'a' && i <= 'z' || i >= 'A' && i <= 'Z' || i == '\'')
+                {
+                    str += i;
+                }
+                else if (str.Length > 0)
+                {
+
+                    if (obj.TryGetValue(str, out var current))
+                        obj[str] = ++current;
+                    else
+                        obj.Add(str, 1);
+
+                    str = "";
+                }
+            }
+
+
+            watch.Stop();
+            elapsedMs = watch.ElapsedMilliseconds;
+            System.Console.WriteLine("time:  " + elapsedMs);
+
+            Console.WriteLine("about " + obj["about"]);
+        }
+    }
+}
